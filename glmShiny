@@ -1,0 +1,177 @@
+ui <- fluidPage(
+  titlePanel("GLM for Taylor's Separation Methods"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      
+      radioButtons("cumul", h5("Triangle"),
+                   choices = list("Incremental" = 1, "Acumulative" = 2)),
+      
+      selectInput("metodo", h5("Taylor Separation Method"), 
+                  choices = list("Arithmetic" = "Arithmetic", "Geometric" = "Geometric")),
+      
+      numericInput("efecto",h5("Calendar Year Effect (%)"),
+                   min = 0, max = 100, value = 0, step = 0.5),
+      helpText("Enter a percentage value"),
+      
+      
+      numericInput("muestras",h5("Samples Bootstrapping"),
+                   min = 0, max = 1000, value = 100, step = 50),
+      
+      numericInput("semilla",h5("Set seed"),
+                   min = 0, max = 10000, value = 7, step = 1),
+      helpText("Enter an specific seed #"),
+      
+      actionButton("calc","Calculate"),
+      p("Click the 'Calculate' button to see the results on the main panel")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Data",
+                 h5("Initial Triangle"),tableOutput("sep_triangu")),
+        tabPanel("GLM Triangle",
+                 h5("Full GLM Triangle"),tableOutput("sep_glmtri")),
+        tabPanel("O.Y. Summary", 
+                 h5("Summary by Origin Year (Boots)"),tableOutput("sep_oyresu")),
+        tabPanel("C.Y. Summary", 
+                 h5("Summary by Calendar Year (Boots)"),tableOutput("sep_cyresu")),
+        tabPanel("Graphs",
+                 tabBox(title="", id="PredicDist",width=NULL,
+                        tabPanel("Histogram",
+                                 plotOutput("sep_hist")
+                        ),
+                        tabPanel("Ultimate Claims",
+                                 plotOutput("sep_ultim")
+                        ),
+                        tabPanel("Latest per O.Y.",
+                                 plotOutput("sep_latest")
+                        ),
+                        tabPanel("Future Payments per C.Y",
+                                 plotOutput("sep_vpfb")
+                        )
+                 #h5("Graphs"),plotOutput("sep_hist"))
+                 )
+            )
+      )
+  )
+)
+) 
+
+# Define server logic ----
+server <- function(input, output) {
+  sep_triangu <- observeEvent(input$calc,{
+    input$cumul
+  })
+  sep_glmtri <- eventReactive(input$calc,{
+    input$metodo
+  })
+  sep_oyresu <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  sep_cyresu <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  sep_hist <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  sep_ultim <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  sep_latest <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  sep_vpfb <- eventReactive(input$calc,{
+    input$metodo
+    input$efecto
+    input$muestras
+    input$semilla
+  })
+  
+  
+  output$sep_triangu <- renderTable({
+    tri1 <- round(glmTaylorsep(incracum = input$cumul)$triangle, digits=2) 
+    year <- as.character(c(1:nrow(tri1)))
+    cbind(year,tri1)
+    
+  })
+  output$sep_glmtri <- renderTable({
+    tri2 <- round(glmTaylorsep(metodo = input$metodo)$glm.triangle, digits=2)
+    year <- as.character(c(1:nrow(tri2)))
+    cbind(year,tri2)
+    
+  })
+  output$sep_oyresu <- renderTable({
+    table1 <- round(glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                               B=input$muestras, seed = input$semilla )$OYearSumm, digits=2)
+    OY<-c(1:(nrow(table1)-1),"Total")
+    cbind(OY,table1)
+  })
+  output$sep_cyresu <- renderTable({
+    table2 <- round(glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                               B=input$muestras, seed = input$semilla )$CYearSumm, digits=2)
+    years <- seq(from=(nrow(table2)+1), length=(nrow(table2)-1))
+    CY <- c(years,"Total")
+    cbind(CY,table2)
+  })
+  output$sep_hist <- renderPlot({
+    hist(glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                      B = input$muestras, seed = input$semilla )$reserve.boot,
+         main="Pred Distribution (Bootstrap)",
+         xlab="IBNR",
+         col="grey",
+         freq=TRUE)
+  })
+  output$sep_ultim <- renderPlot({
+    ggplot(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                               B = input$muestras, seed = input$semilla)$aux.ult, aes(x = oy, y = ultimate)) +
+      geom_boxplot(color = "dark grey") +
+      geom_point(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                                     B = input$muestras, seed = input$semilla)$aux.ult.oy, mapping = aes(x = oy, y = mu),
+                 inherit.aes = FALSE, color = "red") +
+     labs(title = "Ultimate Claims Costs", subtitle = "(simulated by Bootstrapping)", x = "Origin Year", y = "Claims Costs") +
+      theme_bw() +
+      theme(panel.grid = element_blank())
+  })
+  output$sep_latest <- renderPlot({
+    ggplot(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                               B = input$muestras, seed = input$semilla)$aux.lat, aes(x = oy, y = latest)) +
+      geom_boxplot(color = "dark grey") +
+      geom_point(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                                     B = input$muestras, seed = input$semilla)$aux.lat.oy, mapping = aes(x = oy, y = mu),
+                 inherit.aes = FALSE, color = "red") +
+      labs(title = "Latest Claims ", subtitle = "(simulated by Bootstraping)", x = "Origin Year", y = "Latest Claims") +
+      theme_bw() +
+      theme(panel.grid = element_blank())
+  })
+  output$sep_vpfb<- renderPlot({
+    ggplot(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                               B = input$muestras, seed = input$semilla)$aux.vpfb, aes(x = cy, y = vpfb)) +
+      geom_boxplot(color = "dark grey") +
+      geom_point(data = glmTaylorsep(metodo = input$metodo, lambdaini =  input$efecto,
+                                     B = input$muestras, seed = input$semilla)$aux.vpfb.cy, mapping = aes(x = cy, y = mu),
+                 inherit.aes = FALSE, color = "red") +
+      labs(title = "Future Payments",subtitle = "(simulated by Bootstraping)", x = "Calendar Year", y = "Future Payments") +
+      theme_bw() +
+      theme(panel.grid = element_blank())
+  })
+}
+
+
+# Run the app ----
+shinyApp(ui=ui, server=server)
