@@ -1,0 +1,684 @@
+glmTaylorsep <- function(incracum=1, metodo= "Geometric", lambdaini = 0, B = 1000, seed = 7){
+  
+  lambdaini<-lambdaini/100
+  
+  #1 obtener vector con número de siniestros, Talor & Ashe 1983
+  Nij <- c(40, 124, 157, 93, 141, 22, 14, 10, 3, 2, 
+           37, 186, 130, 239, 61, 26, 23, 6, 6, 
+           35, 158, 243, 153, 48, 26, 14, 5, 
+           41, 155, 218, 100, 67, 17, 6,
+           30, 187, 166, 120, 55, 13, 
+           33, 121, 204, 87, 37,
+           32, 115, 146, 103,
+           43, 111, 83,
+           17, 92,
+           22)
+  
+  TT <- trunc(sqrt(2*length(Nij)))
+  i <- rep(1:TT,TT:1)
+  j <- sequence(TT:1)
+  
+  #matrices de Ni: datos sin acumular, datos acumulados
+  
+  Nij.mat.cum <- Nij.tri <- matrix(NA, nrow=TT, ncol=TT)
+  for (k in 1:length(Nij)) Nij.tri[i[k],j[k]] <- Nij[k]
+  for (k in 1:TT) Nij.mat.cum[k,] <- cumsum(Nij.tri[k,])
+  
+  #paso 1: MUNDO REAL
+  #paso 1.1 triángulo de número de siniestros
+  #glmReserve para obtener número total sin. por año de origen, con CL
+  Nij.mat.cum.tri <- as.triangle(Nij.mat.cum)
+  glmtriN <- glmReserve(Nij.mat.cum.tri,mse.method = "formula")
+  
+  #VECTOR DE SINIESTROS POR AÑO DE ORIGEN
+  Ni <- as.vector(glmtriN$FullTriangle[,10])
+  Ni.mat <- matrix(Ni,TT,TT)
+  Ni.ao <- rep(Ni, TT:1)
+  
+  
+  #2 Cuantías de siniestros, Taylor & Ashe
+  #MATRIZ QUE SE PRESENTA DESACUMULADA: Xij.mat
+  
+  Xij.mat.acum <- Xij.mat <- Xij.prom.mat <- Xij.prom <- matrix(NA,nrow = nrow(GenIns), ncol = ncol(GenIns))
+  
+  Xij.mat.acum[,] <- GenIns[,]
+  colnames(Xij.mat.acum )<-c(1:10)
+  row.names(Xij.mat.acum )<-c(1:10)
+  #names(dimnames(Xij.mat.acum)) <- c("Orig.Year", "Dev.Year")
+  
+  for (i in 2:10) {
+    Xij.mat[,i] <- GenIns[,i]-GenIns[,i-1]
+  }
+  Xij.mat[,1] <- GenIns[,1]
+  
+  colnames(Xij.mat)<-c(1:10)
+  row.names(Xij.mat)<-c(1:10)
+  #names(dimnames(Xij.mat)) <- c("Orig.Year", "Dev.Year")
+  
+  Xij<- as.vector(t(Xij.mat))
+  Xij<- Xij[!is.na(Xij)]
+  
+  rm(TT,i,j)
+  
+  TT <- trunc(sqrt(2*length(Xij)))
+  i <- rep(1:TT,TT:1)
+  j <- sequence(TT:1)
+  
+  #matriz cuantías medias, se necesita para hallar los lambdas: Xij.prom.mat
+  Xij.prom.mat <- Xij.mat/Ni.mat
+  Xij.prom <- as.vector(t(Xij.prom.mat))
+  Xij.prom <- Xij.prom[!is.na(Xij.prom)]
+  
+  if (incracum==1){triangu=Xij.mat}
+  
+  if (incracum==2){triangu=Xij.mat.acum}
+  
+  #3 GLM PARA CÁLCULO DE RESULTADOS POR MÉTODOS DE SEPARACIÓN
+  #paso 1.2 estimar triángulo de reclamaciones con métodos de separación
+  #variables aorigen, adllo, acalendario, factor infl
+  ao <- rep(1:TT,TT:1)
+  ad <- sequence(TT:1)
+  ac <- ao+ad-1
+  ao <- as.factor(ao)
+  ad <- as.factor(ad)
+  ac <- as.numeric(ao) + as.numeric(ad)
+  
+  #3.1 SEP ARITMÉTICA
+  #requiere los datos de cuantías medias reales en vector, no en matriz
+   if(metodo == "Arithmetic"){
+    glm.Aritm <- glm(Xij.prom ~ ad + ac, family = statmod::tweedie(var.power = 1, link.power = 0))
+    
+    #Triángulo-matrix con cuantías medias acumuladas, datos ajustados después de glmAritm
+    Xij.prom.fit.mat <- matrix(0, TT,TT) 
+    for (i in 1:TT){
+      Xij.prom.fit.mat[i, ] <- c(glm.Aritm$fitted.values[ao == i],rep(times = i-1, NA))
+    }
+    #triáng-matrix datos ajustados, multip por Ni
+    Xij.fitted <- Xij.prom.fit.mat * Ni
+    
+    #aux x tal
+    #triáng sup con valores reales, triáng inferior con datos ajustados
+    triangulo.glm <- matrix(0, TT, TT)
+    for (i in 2:TT){
+      tal <- glm.Aritm$fitted.values[((ao == (TT-i+1)) & (ad == i))] * Ni[(TT-i+2):TT] *
+        (1+lambdaini)^(1:(i-1))
+      triangulo.glm[, i] <- c(Xij.mat[1:(TT-i+1), i], tal)
+      rm(tal)
+    }
+    #TRIÁNGULO FINAL COMPLETO, OUTPUT PARA MOSTRAR EN SHINY
+    triangulo.glm[, 1] <- Xij.mat[, 1]
+    colnames(triangulo.glm) <- c(1:TT)
+    row.names(triangulo.glm) <- c(1:TT)
+    #names(dimnames(triangulo.glm)) <- c("Orig.Year", "Dev.Year")
+  }
+  
+  #3.2 SEPARACIÓN GEOMÉTRICA
+  if(metodo == "Geometric"){
+    #distr norm sobre log de las cuantías medias, enlace 1
+    glm.Geomet <- glm(log(Xij.prom) ~ ad + ac, family = statmod::tweedie(var.power = 0,link.power = 1))
+    
+    #Triángulo-matrix con cuantías medias acumuladas, datos ajustados después de glm.Geomet
+    Xij.prom.fit.mat <- matrix(0, TT, TT)
+    for (i in 1:TT){
+      Xij.prom.fit.mat[i, ] <- c(glm.Geomet$fitted.values[ao == i], rep(times = i-1, NA))
+    }
+    
+    #triángulo-mat ajustado con la exp, se trabajó con los log ***TT
+    Xij.fitted <- exp(Xij.prom.fit.mat) * Ni
+    
+    triangulo.glm <- matrix(0, TT, TT)
+    
+    for (i in 2:TT){
+      tal <- exp(glm.Geomet$fitted.values[((ao == (TT-i+1)) & (ad == i))]) * Ni[(TT-i+2):TT] *
+        (1 + lambdaini)^(1:(i-1))
+      triangulo.glm[, i] <- c(Xij.mat[1:(TT-i+1), i], tal)
+      rm(tal)
+    }
+    #TRIÁNGULO FINAL COMPLETO, devuelve para mostrar en SHINY
+    triangulo.glm[, 1] <- Xij.mat[, 1]
+    colnames(triangulo.glm) <-c (1:TT)
+    row.names(triangulo.glm) <-c (1:TT)
+    #names(dimnames(triangulo.glm)) <- c("Orig.Year", "Dev.Year")
+  }
+  
+  #paso 1.2: CÁLCULO DE PHI
+  if (metodo == "Arithmetic"){
+    phi <- (sum(glm.Aritm$residuals^2/glm.Aritm$df.residual))
+  }
+  if (metodo == "Geometric"){
+    phi <- (sum(glm.Geomet$residuals^2/glm.Geomet$df.residual))
+  }
+  
+  #4 RESERVAS POR AÑO DE ORIGEN Y TOTAL
+  #paso 1.2 Cálculos de reservas por año de origen y totales
+  #resanyo tiene las reservas por año de origen, a partir de los cálculos del GLM
+  
+  resanyo <- rep(0, TT-1)
+  for (i in 2:TT){
+    resanyo[i-1] <- sum(triangulo.glm[i, (TT-i+2):TT])
+  }
+  #TOTAL-restotal=totres
+  restotal <- sum(resanyo)
+  
+  #VECTOR PAGOS FUTUROS: fpv=vecpagos; suma por diagonales, triángulo GLM
+  vecpagos <- rep(0, dim(triangulo.glm)[1] - 1)
+  for (v in 1:dim(triangulo.glm)[1] - 1) {
+    diagtf <- row(triangulo.glm) + col(triangulo.glm) - 1 == dim(triangulo.glm)[1] + v
+    vecpagos[v] <- sum(triangulo.glm[diagtf])
+  }
+  
+  #datos reserva total y vpf en matrix
+  resanyo.matrix <- matrix(data = resanyo, B, TT-1, byrow = TRUE)
+  vpf.matrix <- matrix(data=vecpagos, B, TT-1, byrow = TRUE)
+  
+  #5 CÁLCULO DE LAMBDA Y R - parámetros de incidencia por año de desarrollo y de calendario
+  #Hipótesis de factor de incidencia establecido en lambdaini
+  
+  # 5.1. Por Separación Aritmética
+  if (metodo == "Arithmetic"){
+    ##Sij=Xij.prom.mat
+    sij<-Xij.prom.mat
+    
+    suma.col <- colSums(sij, na.rm = TRUE)
+    
+    suma.diag <- rep(0, TT)
+    for (k in 1:TT){
+      diagonaltf <- row(sij) + col(sij) - 1 == k
+      suma.diag[k] <- sum(sij[diagonaltf])
+    }
+    rm(diagonaltf)
+    lambda <- rep(0, TT)
+    r <- rep(0, TT)
+    lambda[TT] <- suma.diag[TT]
+    r[TT] <- suma.col[TT]/lambda[TT]
+    for (i in 1:(TT-1)){
+      lambda[TT-i] <- suma.diag[TT-i]/(1-sum(r[(TT-i+1):TT]))
+      r[TT-i] <- suma.col[TT-i]/sum(lambda[(TT-i):TT])
+    }
+    lambdainf <- lambda[TT] * (1+lambdaini)^(1:(TT-1))
+    lambdatotal <- c(lambda, lambdainf)
+  }
+  
+ 
+  # 5.2. Por Separación Geométrica
+  if (metodo == "Geometric"){
+    #traer matrix de cuantías medias
+    sij<-Xij.prom.mat
+    
+    prod.col <- rep(0, TT)
+    for (k in 1:TT){
+      prod.col[k] <- prod(sij[(1:(TT+1-k)), k])
+    }
+    
+    prod.diag <- rep(1, TT)
+    for (k in 1:TT){
+      diagtf <- row(sij) + col(sij) - 1 == k
+      prod.diag[k] <- prod(sij[diagtf])
+    }
+    
+    lambda <- rep(0, TT)
+    r <- rep(0, TT)
+    lambda[TT] <- prod.diag[TT]^(1/TT)
+    r[TT] <- prod.col[TT]/lambda[TT]
+    for (i in 1:(TT-1)){
+      lambda[TT-i] <- (prod.diag[TT-i]*prod(r[(TT-i+1):TT]))^(1/(TT-i))
+      r[TT-i] <- (prod.col[TT-i]/prod(lambda[(TT-i):TT]))^(1/(i+1))
+    }
+    lambdainf <- lambda[TT] * (1+lambdaini)^(1:(TT-1))
+    lambdatotal <- c(lambda, lambdainf)
+  }
+  
+ 
+  
+  #PASO 2: MUNDO BOOTSTRAPPING
+  # 6. Bootstraping a partir de lambdas obtenidos
+ 
+  lambda.mat <- matrix(0, TT, TT)
+  for (i in 1:TT){
+    lambda.mat[, i] <- lambdatotal[i:(TT+i-1)]
+  }
+  r.vector <- rep(r, each = TT)
+  r.mat <- matrix(r.vector, TT, TT)
+  cij.boot <- array(dim = c(TT, TT, B), data = 0)
+  
+  
+  #paso 2.1
+  #obtener B pseudo-triángulos superiores con cuantías de siniestros bajo una distribución Gamma
+  for (i in 1:TT){
+    for (j in 1:TT){
+      cij.boot[i, j, ] <- rgamma(B, Ni.mat[i, j]/phi, 1/(r.mat[i,j] * lambda.mat[i,j] * phi))
+    }
+  }
+  
+  # TRIANGULOS CON CUANTIAS iniciales OBTENIDOS POR BOOTSTRAP (muestreo cij)
+  tri.sup.boot <- array(dim = c(TT, TT, B), data = 0)
+  for (boots in 1:B){
+    if(! is.null(seed)){
+      set.seed(seed)
+    }
+    for(i in 1:TT){
+      tri.sup.boot[i, , boots] <- c(cij.boot[i, 1:(TT-i+1), boots],
+                                    rep(times = i-1, NA))
+    }
+  }
+  
+  #Para traer el primer arreglo-slice (matrix): cij.boot[1:10,1:10,1] = cijboot
+  #tri.sup.boot[1:10,1:10,1]
+  
+  #paso 2.2
+  #Triángulos inferiores a partir de los triáng. superiores obtenidos con bootstrapping cij.boot
+  
+  tri.inf.boot <- array(dim = c(TT, TT, B), data = NA)
+  for (boots in 1:B){
+    if(! is.null(seed)){
+      set.seed(seed)
+    }
+    for (i in 2:TT){
+      tri.inf.boot[i, , boots] <- c(rep(times = (TT-i+1), NA), cij.boot[i, (TT-i+2):TT, boots])
+    }
+  }
+  
+  boot.mat <- matrix(0, TT, TT) 
+  boot.tal <- matrix(NA, TT, TT)
+  tri.glm.boot <- array(data = 0, dim = c(TT, TT, B)) #arreglo para almacenar triángulos inferiores
+  
+  #paso 2.2
+  # 6.1 Separación Aritmética con triángulos obtenidos por Bootstrapping
+  #obtener B triángulos inferiores a partir del Bootstrapping con glm sep. aritmética
+  
+  if (metodo == "Arithmetic"){
+    for (boots in 1:B) {
+      if(! is.null(seed)){
+        set.seed(seed)
+      }
+      boot.mat <- t(tri.sup.boot[, , boots])
+      boot.vector <- as.vector(boot.mat)
+      boot.vector <- boot.vector[!is.na(boot.vector)]
+      
+      boot.prom <- boot.vector/Ni.ao
+      
+      glm.Aritm.boot <- glm(boot.prom ~ ad + ac, family = statmod::tweedie(var.power = 1, link.power = 0))
+      
+      for (i in 2:TT){
+        tal <- glm.Aritm.boot$fitted.values[((ao == (TT-i+1)) & (ad == i))] * Ni[(TT-i+2):TT] *
+          (1+lambdaini)^(1:(i-1))
+        tri.glm.boot[, i, boots] <- c(boot.tal[1:(TT-i+1), i], tal)
+        rm(tal)
+      }
+      tri.glm.boot[, 1, boots] <- boot.tal[, 1]
+    }
+  }
+  
+  
+  # 6.2 Separación Geométrica con triángulos Boots
+  #paso 2.2
+  #obtener B triángulos inferiores a partir del Bootstrapping con glm sep. geométrica
+  
+  if (metodo == "Geometric"){
+    for (boots in 1:B) {
+      if(! is.null(seed)){
+        set.seed(seed)
+      }
+      boot.mat <- t(tri.sup.boot[, , boots])
+      boot.vector <- as.vector(boot.mat)
+      boot.vector <- boot.vector[!is.na(boot.vector)]
+      
+      boot.prom <- boot.vector/Ni.ao
+      
+      glm.Geomet.boot <- glm(log(boot.prom) ~ ad + ac, family = statmod::tweedie(var.power = 1,link.power = 0))
+      for (i in 2:TT){
+        tal <- exp(glm.Geomet.boot$fitted.values[((ao==(TT-i+1))&(ad==i))]) * Ni[(TT-i+2):TT] *
+          (1+lambdaini)^(1:(i-1))
+        tri.glm.boot[, i, boots] <- c(boot.tal[1:(TT-i+1), i], tal)
+        rm(tal)
+      }
+      tri.glm.boot[, 1, boots] <- boot.tal[,1]
+    }
+  }
+  
+  #PASO 3: ANÁLISIS DE LAS SIMULACIONES
+  # 7 ERRORES DE PREDICCIÓN 
+  #obtener reservas por año de origen, (B) reservas totales por cada Bootstrapping, 
+ 
+  resanyorboot.mat <- matrix(0, B, TT-1) 
+  restotal.boot <- rep(0, times = B) 
+  vecpagos.boot <- matrix(0, B, TT-1) 
+  
+  for (boots in 1:B){
+    if(! is.null(seed)){
+      set.seed(seed)
+    }
+    # Matrix con reservas por año de origen, con el triángulo inferior GLM obtenido por boots
+    for (i in 2:TT){
+      resanyorboot.mat[boots, i-1] <- sum(tri.glm.boot[i, (TT-i+2):TT, boots])
+    }
+    # Total reserve
+    restotal.boot[boots] <- sum(resanyorboot.mat[boots, ])
+    
+    #suma las diagonales de tri.inf.boot, para crear el vecpagos.boot
+    
+    g <- ncol(tri.glm.boot) + 1
+    vpfaux <- NULL
+    for (z in 1:(nrow(tri.glm.boot)-1)){
+      au <- 0
+      for (i in 1:nrow(tri.glm.boot)){
+        for (j in 1:ncol(tri.glm.boot)){
+          if ((i+j-1) == g){
+            au <- sum(au, tri.glm.boot[i, j, boots], na.rm = TRUE)
+          }
+        }
+      }
+      vpfaux[z] <- au
+      g <- g + 1
+    }
+    vecpagos.boot[boots, ] <-vpfaux
+  }
+  
+  # Obtener pagos futuros con bootstrap
+  resanyorfut.boot <- matrix(0, B, TT-1)
+  restotalfut.boot <- rep(0, times = B)
+  vecpagosfut.boot <- matrix(0, B, TT-1)
+  
+  for (boots in 1:B){
+    if(! is.null(seed)){
+      set.seed(seed)
+    }
+    tri.boot <- tri.inf.boot[, , boots]
+    #tri.boot trae 1000 slices de tri.inf.boot
+    
+    # Origin year reserve: suma por año de origen, 9 años por slice, B slices
+    for (i in 2:TT){
+      resanyorfut.boot[boots, i-1] <- sum(tri.boot[i, (TT-i+2):TT])
+    }
+    
+    # Total reserve: suma las reservas por slice, 1000 datos
+    restotalfut.boot[boots] <- sum(resanyorfut.boot[boots, ])
+    
+    
+    # Vector of future payments boots: suma por año cal de cada slice(triáng inf), 9 años por slice, B slices
+    a <- ncol(tri.inf.boot) + 1
+    vpfutaux <- NULL
+    for (z in 1:(nrow(tri.inf.boot)-1)){
+      aux <- 0
+      for (i in 1:nrow(tri.inf.boot)){
+        for (j in 1:ncol(tri.inf.boot)){
+          if ((i+j-1) == a){
+            aux <- sum(aux, tri.inf.boot[i, j, boots], na.rm = TRUE)
+          }
+        }
+      }
+      vpfutaux[z] <- aux
+      a <- a + 1
+    }
+    vecpagosfut.boot[boots, ] <- vpfutaux
+    rm(aux)
+  }
+  
+  #vecpagosfut.boot.df
+  vecpagosfut.boot.df <- matrix(vecpagosfut.boot, ncol=ncol(vecpagosfut.boot), nrow = nrow(vecpagosfut.boot))
+  
+  aux.vpfb <- reshape2::melt(vecpagosfut.boot.df)
+  colnames(aux.vpfb) <- c("B", "cy", "vpfb")
+  aux.vpfb$cy <- aux.vpfb$cy
+  aux.vpfb$cy <- factor(aux.vpfb$cy)
+  aux.vpfb.cy <- aux.vpfb %>% dplyr::group_by(cy) %>% dplyr::summarise(mu=mean(vpfb))
+  
+  #CÁLCULO DE ERRORES DE PREDICCIÓN 
+  #vecpagosfut.boot toma info de tri.glm.boot; vecpagos.boot toma info de tri.inf.boot
+
+  erp.orig <- erp.vecpagfut <- matrix(0, B, TT-1)
+  
+  for (boots in 1:B){
+    if(! is.null(seed)){
+      set.seed(seed)
+    }
+    for(i in 1:(TT-1)){
+      erp.orig[boots, ] <- (resanyorfut.boot[boots, ] - resanyorboot.mat[boots, ])
+      erp.vecpagfut[boots, ] <- vecpagosfut.boot[boots, ] - vecpagos.boot[boots, ]
+    }
+  }
+  erp.total <- restotalfut.boot - restotal.boot
+  
+  
+  #paso 3
+  #Distribuciones predictivas
+  resanyo.pred <- resanyo.matrix + erp.orig
+  vpfut.pred <- vpf.matrix + erp.vecpagfut 
+  restotal.pred <- restotal + erp.total
+  
+  
+  # 8. Resultados
+  
+  #Resumen por año de origen
+  out.sum <- matrix(NA, ncol = 10, nrow = TT+1,
+                    dimnames = list(c(rownames(Xij.mat), "O.Y. TOTAL"),
+                                    c("Latest", "dev.to.date", "Ultimate",
+                                      "IBNR", "IBNR mean", "Pred.Err (Abs)", "CV",
+                                      "IBNR quant75", "IBNR quant95",
+                                      "IBNR quant99")))
+  
+  aux <- array(0, c(TT, TT, B))
+  auxup <- tri.sup.boot; auxdn <- tri.glm.boot
+  auxup[is.na(auxup)] <- 0; auxdn[is.na(auxdn)] <- 0
+  for (i in 1:B){
+    aux[, , i] <- auxup[, , i] + auxdn[, , i]
+  }
+  rm(auxup, auxdn, i)
+  
+  #incrementar triángulos
+  increm.tri <- array(0, c(TT, TT, B))
+  for (i in 1:B){
+    increm.tri[ , ,i] <- t(apply(aux[ , ,i],1,cumsum))
+  }
+  
+  ## Latest
+  diagon <- row(increm.tri[, , 1]) + col(increm.tri[, , 1]) - 1 == nrow(increm.tri)
+  latest <- matrix(increm.tri[diagon], ncol = nrow(Xij.mat), nrow = B, byrow=TRUE)
+  latest.df <- matrix(rev(latest), ncol=ncol(latest), nrow = nrow(latest))
+  
+  aux.lat <- reshape2::melt(latest.df)
+  colnames(aux.lat) <- c("B", "oy", "latest")
+  aux.lat$oy <- aux.lat$oy
+  aux.lat$oy <- factor(aux.lat$oy)
+  aux.lat.oy <- aux.lat %>% dplyr::group_by(oy) %>% dplyr::summarise(mu=mean(latest))
+
+
+  out.sum[, 1] <- c(rev(colMeans(latest)), sum(colMeans(latest)))
+  rm(i)
+  #rm(latest, i, diagon)
+  
+ 
+  ## Ultimate
+  ultimate <- NULL
+  for (i in 1:nrow(aux)){
+    ultimate <- c(ultimate, mean(increm.tri[i, ncol(increm.tri), ]))
+  }
+  out.sum[, 3] <- c(ultimate, sum(ultimate))
+  #rm(ultimate, i)
+  
+  ##ultimate.df
+  ultimate.df <- matrix(0, ncol = nrow(increm.tri),
+                     nrow = dim(increm.tri)[3])
+  for (i in 1:dim(increm.tri)[3]){
+    ultimate.df[i, ] <- increm.tri[, ncol(increm.tri), i]
+  }
+  
+  aux.ult <- reshape2::melt(ultimate.df)
+  colnames(aux.ult) <- c("B", "oy", "ultimate")
+  aux.ult$oy <- aux.ult$oy
+  aux.ult$oy <- factor(aux.ult$oy)
+  aux.ult.oy <- aux.ult %>% dplyr::group_by(oy) %>% dplyr::summarise(mu=mean(ultimate))
+  
+  
+  ## IBNR 
+  out.sum[, 4]<-c(0, resanyo, sum(resanyo))
+  
+  ## IBNR medio 
+  out.sum[, 5] <- c(0, colMeans(resanyorboot.mat), mean(restotal.boot))
+  
+  ## deviation to date
+  out.sum[, 2] <- out.sum[, 1]/out.sum[, 3]
+  
+  #c(rev(colMeans(latest)), sum(colMeans(latest))) / c(ultimate, sum(ultimate))
+  
+  ## PE 
+  out.sum[, 6] <- c(0, colMeans(abs(erp.orig)), mean(abs(erp.total)))
+  
+  ## CV
+  out.sum[ , 7] <- out.sum[, 6]/out.sum[, 4]
+  
+  #c(0, colMeans(abs(erp.orig)), mean(abs(erp.total))) / c(0, resanyo, sum(resanyo))
+  
+  #Cuantiles 
+  
+  out.sum[, 8] <- c(0, apply(resanyorboot.mat, 2, quantile, 0.75), quantile(restotal.boot, 0.75))
+  out.sum[, 9] <- c(0, apply(resanyorboot.mat, 2, quantile, 0.95), quantile(restotal.boot, 0.95))
+  out.sum[, 10] <- c(0, apply(resanyorboot.mat, 2, quantile, 0.99), quantile(restotal.boot, 0.99))
+  
+  out.sum[is.nan(out.sum)] <- 0
+  
+  
+  
+  #Resumen por año de calendario
+  labelac <- paste0( (TT+1):(TT+ncol(Xij.mat)-1))
+  out.sum2 <- matrix(NA, ncol = 7, nrow = TT,
+                     dimnames = list(c(labelac, "C.Y. TOTAL "),
+                                     c("IBNR", "IBNR mean", "PredErr Abs", "CV",
+                                       "IBNR quant75", "IBNR quant95",
+                                       "IBNR quant99")))
+  
+  out.sum2[, 1] <- c(vecpagos, sum(vecpagos))
+  
+  out.sum2[, 2] <- c(apply(vecpagosfut.boot,2,mean), sum(apply(vecpagosfut.boot,2,mean)))
+  
+  out.sum2[, 3] <- c(apply(abs(erp.vecpagfut),2,mean), sum(apply(abs(erp.vecpagfut),2,mean)))
+  
+  out.sum2[, 4] <- out.sum2[,3]/out.sum2[,2]
+  #c(apply(abs(erp.vecpagfut),2,mean), sum(apply(abs(erp.vecpagfut),2,mean))) / 
+  #c(apply(vecpagosfut.boot,2,mean), sum(apply(vecpagosfut.boot,2,mean)))
+  
+  out.sum2[, 5] <- c(apply(vecpagosfut.boot, 2, quantile, 0.75, na.rm = TRUE), 
+                     quantile(restotalfut.boot, 0.75, na.rm = TRUE))
+  
+  out.sum2[, 6] <- c(apply(vecpagosfut.boot, 2, quantile, 0.95, na.rm = TRUE),
+                     quantile(restotalfut.boot, 0.95, na.rm = TRUE))
+  
+  out.sum2[, 7] <- c(apply(vecpagosfut.boot, 2, quantile, 0.99, na.rm = TRUE),
+                     quantile(restotalfut.boot, 0.99, na.rm = TRUE))
+  
+  out.sum2[is.nan(out.sum2)] <- 0
+  
+  #Objeto con resultados, para output en Shiny
+ 
+  if (metodo == "Arithmetic"){
+    resumen <- list(call = match.call(expand.dots = FALSE),
+                    sepmethod = metodo,
+                    triangle = triangu,
+                    freqData = Ni,
+                    glm.triangle = triangulo.glm,
+                    reserve.boot = restotalfut.boot,
+                    glm.triangle.bootstrap = tri.glm.boot,
+                    OYearSumm = out.sum,
+                    CYearSumm = out.sum2,
+                    ultimate = ultimate,
+                    labelac = labelac,
+                    aux.ult = aux.ult,
+                    aux.ult.oy = aux.ult.oy,
+                    aux.lat = aux.lat,
+                    aux.lat.oy = aux.lat.oy,
+                    aux.vpfb = aux.vpfb,
+                    aux.vpfb.cy = aux.vpfb.cy
+    )
+  }
+  if (metodo == "Geometric"){
+    resumen <- list(call = match.call(expand.dots = FALSE),
+                    sepmethod = metodo,
+                    triangle = triangu,
+                    freqData = Ni,
+                    glm.triangle = triangulo.glm,
+                    reserve.boot = restotalfut.boot,
+                    glm.triangle.bootstrap = tri.glm.boot,
+                    OYearSumm = out.sum,
+                    CYearSumm = out.sum2,
+                    ultimate = ultimate,
+                    labelac = labelac,
+                    aux.ult = aux.ult,
+                    aux.ult.oy = aux.ult.oy,
+                    aux.lat = aux.lat,
+                    aux.lat.oy = aux.lat.oy,
+                    aux.vpfb = aux.vpfb,
+                    aux.vpfb.cy = aux.vpfb.cy
+     )
+  }
+  class(resumen) <- "glmTaylor"
+  return(resumen)
+}
+
+
+#triangglmboot:tri.glm.boot
+
+
+
+
+
+###########################################shiny################################################
+
+ui <- fluidPage(
+  titlePanel("GLM for Taylor's Separation Methods"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      
+      radioButtons("cumul", h5("Triangle"),
+                   choices = list("Incremental" = 1, "Acumulative" = 2)),
+      
+      selectInput("metodo", h5("Taylor Separation Method"), 
+                  choices = list("Arithmetic" = "Arithmetic", "Geometric" = "Geometric")),
+      
+      numericInput("efecto",h5("Calendar Year Effect (%)"),
+                   min = 0, max = 100, value = 0, step = 0.5),
+      helpText("Enter a percentage value"),
+      
+      
+      numericInput("muestras",h5("Samples Bootstrapping"),
+                   min = 0, max = 1000, value = 100, step = 50),
+      
+      numericInput("semilla",h5("Set seed"),
+                   min = 0, max = 10000, value = 7, step = 1),
+      helpText("Enter an specific seed #"),
+      
+      actionButton("calc","Calculate"),
+      p("Click the 'Calculate' button to see the results on the main panel")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Data",
+                 h5("Initial Triangle"),tableOutput("sep_triangu")),
+        tabPanel("GLM Triangle",
+                 h5("Full GLM Triangle"),tableOutput("sep_glmtri")),
+        tabPanel("O.Y. Summary", 
+                 h5("Summary by Origin Year (Boots)"),tableOutput("sep_oyresu")),
+        tabPanel("C.Y. Summary", 
+                 h5("Summary by Calendar Year (Boots)"),tableOutput("sep_cyresu")),
+        tabPanel("Graphs",
+                 tabBox(title="", id="PredicDist",width=NULL,
+                        tabPanel("Histogram",
+                                 plotOutput("sep_hist")
+                        ),
+                        tabPanel("Ultimate Claims",
+                                 plotOutput("sep_ultim")
+                        ),
+                        tabPanel("Latest per O.Y.",
+                                 plotOutput("sep_latest")
+                        ),
+                        tabPanel("Future Payments per C.Y",
+                                 plotOutput("sep_vpfb")
+                        )
+                 #h5("Graphs"),plotOutput("sep_hist"))
+                 )
+            )
+      )
+  )
+)
+)
